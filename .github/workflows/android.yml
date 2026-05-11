@@ -54,9 +54,9 @@ jobs:
         name: "ai asistent2 v${{ steps.version.outputs.version }}"
         body: |
           ## Yangilanishlar v${{ steps.version.outputs.version }}
-          - Gemini API 400/404 xatolari tuzatildi
-          - API key endi x-goog-api-key header orqali yuboriladi
-          - gemini-2.5-flash, gemini-2.0-flash va gemini-1.5-flash fallback qo'shildi
+          - Telefon UI kompyuter MARK XXX dizayniga yaqinlashtirildi
+          - SYS MONITOR, ACTIVITY LOG, FILE UPLOAD va COMMAND INPUT bloklari qo'shildi
+          - Android notification permission va full black no-actionbar rejimi qo'shildi
         files: app-release.apk
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -1,6 +1,6 @@
 {
-  "versionCode": 14,
-  "versionName": "3.1",
+  "versionCode": 15,
+  "versionName": "3.2",
   "downloadUrl": "https://github.com/orifxon05/ai-asistent2/releases/latest/download/app-release.apk",
-  "changeLog": "API 400/404 xatolari tuzatildi: Gemini 2.5 Flash, header auth va model fallback qo'shildi."
+  "changeLog": "Kompyuter MARK XXX dizayniga yaqinlashtirildi: SYS MONITOR, ACTIVITY LOG, FILE UPLOAD, COMMAND INPUT va notification permission qo'shildi."
 }

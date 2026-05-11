@@ -12,6 +12,8 @@ import android.graphics.Paint
 import android.graphics.RectF
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
+import android.net.Uri
+import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
 import android.speech.RecognitionListener
@@ -67,6 +69,8 @@ class MainActivity : AppCompatActivity() {
         private const val PREF_NAME = "jarvis_prefs"
         private const val KEY_API_KEY = "gemini_api_key"
         private const val MIC_PERMISSION_CODE = 101
+        private const val NOTIFICATION_PERMISSION_CODE = 102
+        private const val FILE_PICK_CODE = 201
         private const val GEMINI_API_BASE = "https://generativelanguage.googleapis.com/v1beta/models"
         private val GEMINI_MODELS = listOf(
             "gemini-2.5-flash",
@@ -85,6 +89,8 @@ class MainActivity : AppCompatActivity() {
         prefs = getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE)
         rootLayout = FrameLayout(this).apply { setBackgroundColor(JarvisHudView.C_BG) }
         setContentView(rootLayout)
+        supportActionBar?.hide()
+        requestNotificationPermission()
 
         val savedKey = prefs.getString(KEY_API_KEY, null)
         if (savedKey.isNullOrBlank()) {
@@ -210,64 +216,78 @@ class MainActivity : AppCompatActivity() {
             layoutParams = LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 0,
-                1.25f
+                1.02f
             )
         }
         hudView = hud
         main.addView(hud)
 
-        val logPanel = LinearLayout(this).apply {
+        val controlDeck = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            background = panelBg()
             setPadding(dp(10), dp(8), dp(10), dp(8))
             layoutParams = LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 0,
-                0.9f
-            ).apply {
-                leftMargin = dp(12)
-                rightMargin = dp(12)
-                bottomMargin = dp(8)
-            }
+                1.08f
+            )
         }
 
-        val header = LinearLayout(this).apply {
+        val topPanels = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                0,
+                1f
+            )
+        }
+
+        val sysPanel = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            background = panelBg()
+            setPadding(dp(6), dp(6), dp(6), dp(6))
+            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, 0.58f).apply {
+                rightMargin = dp(8)
+            }
+        }
+        sysPanel.addView(panelTitle("* SYS MONITOR"))
+        sysPanel.addView(monitorRow("CPU", "58%", JarvisHudView.C_PRI))
+        sysPanel.addView(monitorRow("MEM", "93%", Color.rgb(255, 51, 92)))
+        sysPanel.addView(monitorRow("NET", "49KB/S", JarvisHudView.C_GREEN))
+        sysPanel.addView(monitorRow("GPU", "N/A", JarvisHudView.C_ACC))
+        sysPanel.addView(monitorRow("AI CORE", "ACTIVE", JarvisHudView.C_GREEN))
+        sysPanel.addView(monitorRow("SEC", "CLEARED", JarvisHudView.C_PRI))
+        topPanels.addView(sysPanel)
+
+        val activityPanel = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            background = panelBg()
+            setPadding(dp(8), dp(6), dp(8), dp(6))
+            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, 1f)
+        }
+
+        val activityHeader = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
         }
-        header.addView(TextView(this).apply {
-            text = "MARK XXX"
-            setTextColor(JarvisHudView.C_ACC2)
-            textSize = 10f
-            typeface = monoBold()
+        activityHeader.addView(panelTitle("> ACTIVITY LOG").apply {
             layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
         })
-        header.addView(TextView(this).apply {
+        activityHeader.addView(TextView(this).apply {
             text = "API"
             setTextColor(JarvisHudView.C_PRI)
-            textSize = 12f
+            textSize = 11f
             typeface = monoBold()
             gravity = Gravity.CENTER
-            setPadding(dp(10), dp(6), dp(10), dp(6))
+            setPadding(dp(8), dp(5), dp(8), dp(5))
             background = chipBg()
             isClickable = true
-            setOnClickListener {
-                android.app.AlertDialog.Builder(this@MainActivity)
-                    .setTitle("API key")
-                    .setMessage("Current API key will be removed. Continue?")
-                    .setPositiveButton("Yes") { _, _ ->
-                        prefs.edit().remove(KEY_API_KEY).apply()
-                        showApiKeyScreen()
-                    }
-                    .setNegativeButton("No", null)
-                    .show()
-            }
+            setOnClickListener { showApiResetDialog() }
         })
-        logPanel.addView(header)
+        activityPanel.addView(activityHeader)
 
         val sv = ScrollView(this).apply {
             clipToPadding = false
-            setPadding(0, dp(8), 0, dp(8))
+            setPadding(0, dp(4), 0, dp(4))
             layoutParams = LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 0,
@@ -283,14 +303,36 @@ class MainActivity : AppCompatActivity() {
             )
         }
         sv.addView(messagesLayout)
-        logPanel.addView(sv)
-        main.addView(logPanel)
+        activityPanel.addView(sv)
+        topPanels.addView(activityPanel)
+        controlDeck.addView(topPanels)
+
+        val fileUpload = TextView(this).apply {
+            text = "^   FILE UPLOAD\nDrop file here or click to browse\nImages . Video . Audio . PDF . Docs . Code . Data"
+            setTextColor(JarvisHudView.C_TEXT)
+            textSize = 10f
+            typeface = mono()
+            gravity = Gravity.CENTER
+            background = dashedPanelBg()
+            setPadding(dp(8), dp(8), dp(8), dp(8))
+            isClickable = true
+            isFocusable = true
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply {
+                topMargin = dp(8)
+                bottomMargin = dp(6)
+            }
+            setOnClickListener { openFilePicker() }
+        }
+        controlDeck.addView(fileUpload)
+        controlDeck.addView(panelTitle("> COMMAND INPUT"))
 
         val inputBar = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            setPadding(dp(12), dp(8), dp(12), dp(12))
-            setBackgroundColor(Color.rgb(0, 8, 13))
+            setPadding(0, dp(4), 0, dp(4))
         }
 
         val field = EditText(this).apply {
@@ -302,7 +344,7 @@ class MainActivity : AppCompatActivity() {
             maxLines = 3
             inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE
             background = inputBg()
-            setPadding(dp(14), dp(11), dp(14), dp(11))
+            setPadding(dp(12), dp(10), dp(12), dp(10))
             layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
         }
         inputField = field
@@ -326,10 +368,34 @@ class MainActivity : AppCompatActivity() {
             sendMessage(msg, apiKey)
         }
         inputBar.addView(send)
-        main.addView(inputBar)
+        controlDeck.addView(inputBar)
+
+        controlDeck.addView(TextView(this).apply {
+            text = "  FULLSCREEN  [F11]"
+            setTextColor(JarvisHudView.C_TEXT)
+            textSize = 9f
+            typeface = monoBold()
+            gravity = Gravity.CENTER
+            background = buttonBg()
+            setPadding(dp(10), dp(8), dp(10), dp(8))
+        })
+
+        main.addView(controlDeck)
         rootLayout.addView(main)
 
         addMessage("SYS: J.A.R.V.I.S online. MARK XXX mobile systems ready.", false)
+    }
+
+    private fun showApiResetDialog() {
+        android.app.AlertDialog.Builder(this)
+            .setTitle("API key")
+            .setMessage("Current API key will be removed. Continue?")
+            .setPositiveButton("Yes") { _, _ ->
+                prefs.edit().remove(KEY_API_KEY).apply()
+                showApiKeyScreen()
+            }
+            .setNegativeButton("No", null)
+            .show()
     }
 
     private fun handleMicClick() {
@@ -409,7 +475,7 @@ class MainActivity : AppCompatActivity() {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
         if (requestCode == MIC_PERMISSION_CODE && grantResults.firstOrNull() == PackageManager.PERMISSION_GRANTED) {
             startListening()
-        } else {
+        } else if (requestCode == MIC_PERMISSION_CODE) {
             Toast.makeText(this, "Microphone permission is required.", Toast.LENGTH_SHORT).show()
         }
     }
@@ -417,6 +483,40 @@ class MainActivity : AppCompatActivity() {
     private fun openAccessibilitySettings() {
         Toast.makeText(this, "Opening accessibility settings", Toast.LENGTH_SHORT).show()
         startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+    }
+
+    private fun openFilePicker() {
+        val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+            addCategory(Intent.CATEGORY_OPENABLE)
+            type = "*/*"
+        }
+        try {
+            startActivityForResult(intent, FILE_PICK_CODE)
+        } catch (_: Exception) {
+            Toast.makeText(this, "File picker unavailable", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    @Deprecated("Deprecated in Java")
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode == FILE_PICK_CODE && resultCode == RESULT_OK) {
+            val uri: Uri = data?.data ?: return
+            addMessage("SYS: File loaded - ${uri.lastPathSegment ?: "selected file"}", false)
+        }
+    }
+
+    private fun requestNotificationPermission() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS)
+            != PackageManager.PERMISSION_GRANTED
+        ) {
+            ActivityCompat.requestPermissions(
+                this,
+                arrayOf(Manifest.permission.POST_NOTIFICATIONS),
+                NOTIFICATION_PERMISSION_CODE
+            )
+        }
     }
 
     private fun sendMessage(msg: String, apiKey: String) {
@@ -596,13 +696,53 @@ class MainActivity : AppCompatActivity() {
         background = buttonBg()
         isClickable = true
         isFocusable = true
-        layoutParams = LinearLayout.LayoutParams(dp(48), dp(48)).apply { leftMargin = dp(7) }
+        layoutParams = LinearLayout.LayoutParams(dp(50), dp(46)).apply { leftMargin = dp(7) }
+    }
+
+    private fun panelTitle(text: String) = TextView(this).apply {
+        this.text = text
+        setTextColor(JarvisHudView.C_PRI)
+        textSize = 9f
+        typeface = monoBold()
+        setPadding(0, 0, 0, dp(4))
+    }
+
+    private fun monitorRow(label: String, value: String, valueColor: Int) = LinearLayout(this).apply {
+        orientation = LinearLayout.HORIZONTAL
+        gravity = Gravity.CENTER_VERTICAL
+        background = buttonBg()
+        setPadding(dp(6), dp(5), dp(6), dp(5))
+        layoutParams = LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT,
+            LinearLayout.LayoutParams.WRAP_CONTENT
+        ).apply { bottomMargin = dp(5) }
+
+        addView(TextView(this@MainActivity).apply {
+            text = label
+            setTextColor(JarvisHudView.C_TEXT)
+            textSize = 9f
+            typeface = mono()
+            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+        })
+        addView(TextView(this@MainActivity).apply {
+            text = value
+            setTextColor(valueColor)
+            textSize = 9f
+            typeface = monoBold()
+            gravity = Gravity.END
+        })
     }
 
     private fun panelBg() = GradientDrawable().apply {
         setColor(JarvisHudView.C_PANEL)
         setStroke(dp(1), JarvisHudView.C_MID)
-        cornerRadius = dp(4).toFloat()
+        cornerRadius = dp(3).toFloat()
+    }
+
+    private fun dashedPanelBg() = GradientDrawable().apply {
+        setColor(Color.rgb(0, 13, 18))
+        setStroke(dp(1), JarvisHudView.C_DIM, dp(7).toFloat(), dp(4).toFloat())
+        cornerRadius = dp(5).toFloat()
     }
 
     private fun inputBg() = GradientDrawable().apply {
@@ -843,6 +983,7 @@ class JarvisHudView(context: Context) : View(context) {
         val C_ACC2: Int = Color.rgb(255, 204, 0)
         val C_TEXT: Int = Color.rgb(143, 252, 255)
         val C_PANEL: Int = Color.rgb(1, 12, 16)
+        val C_GREEN: Int = Color.rgb(0, 255, 136)
         val C_RED: Int = Color.rgb(255, 51, 51)
     }
 }

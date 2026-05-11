@@ -14,8 +14,8 @@ android {
         applicationId = "com.example.aiasistent2"
         minSdk = 24
         targetSdk = 36
-        versionCode = 14
-        versionName = "3.1"
+        versionCode = 15
+        versionName = "3.2"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
