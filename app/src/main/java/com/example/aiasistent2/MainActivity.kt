@@ -67,8 +67,12 @@ class MainActivity : AppCompatActivity() {
         private const val PREF_NAME = "jarvis_prefs"
         private const val KEY_API_KEY = "gemini_api_key"
         private const val MIC_PERMISSION_CODE = 101
-        private const val GEMINI_URL =
-            "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent"
+        private const val GEMINI_API_BASE = "https://generativelanguage.googleapis.com/v1beta/models"
+        private val GEMINI_MODELS = listOf(
+            "gemini-2.5-flash",
+            "gemini-2.0-flash",
+            "gemini-1.5-flash"
+        )
 
         private val httpClient = OkHttpClient.Builder()
             .connectTimeout(30, TimeUnit.SECONDS)
@@ -496,23 +500,25 @@ class MainActivity : AppCompatActivity() {
                         .put("maxOutputTokens", 2048)
                         .put("topP", 0.95)
                 )
-            val req = Request.Builder()
-                .url("$GEMINI_URL?key=$apiKey")
-                .post(body.toString().toRequestBody("application/json".toMediaType()))
-                .build()
-
-            httpClient.newCall(req).execute().use { response ->
-                val resBody = response.body?.string() ?: return@withContext null
-                if (!response.isSuccessful) return@withContext null
-                JSONObject(resBody)
-                    .optJSONArray("candidates")
-                    ?.optJSONObject(0)
-                    ?.optJSONObject("content")
-                    ?.optJSONArray("parts")
-                    ?.optJSONObject(0)
-                    ?.optString("text")
-                    ?.trim()
+            for (model in GEMINI_MODELS) {
+                val req = geminiRequest(model, apiKey, body)
+                httpClient.newCall(req).execute().use { response ->
+                    val resBody = response.body?.string() ?: return@use
+                    if (!response.isSuccessful) {
+                        if (response.code == 400 || response.code == 404) return@use
+                        return@withContext null
+                    }
+                    return@withContext JSONObject(resBody)
+                        .optJSONArray("candidates")
+                        ?.optJSONObject(0)
+                        ?.optJSONObject("content")
+                        ?.optJSONArray("parts")
+                        ?.optJSONObject(0)
+                        ?.optString("text")
+                        ?.trim()
+                }
             }
+            null
         } catch (_: Exception) {
             null
         }
@@ -524,15 +530,40 @@ class MainActivity : AppCompatActivity() {
                 "contents",
                 JSONArray().put(JSONObject().put("parts", JSONArray().put(JSONObject().put("text", "Hi"))))
             )
-            val req = Request.Builder()
-                .url("$GEMINI_URL?key=$key")
-                .post(body.toString().toRequestBody("application/json".toMediaType()))
-                .build()
-            httpClient.newCall(req).execute().use { response ->
-                if (response.isSuccessful) null else "API error: ${response.code}"
+            val errors = mutableListOf<String>()
+            for (model in GEMINI_MODELS) {
+                val req = geminiRequest(model, key, body)
+                httpClient.newCall(req).execute().use { response ->
+                    if (response.isSuccessful) return@withContext null
+
+                    val rawError = response.body?.string().orEmpty()
+                    val message = parseGeminiError(rawError)
+                    errors.add("$model: ${response.code}${if (message.isBlank()) "" else " - $message"}")
+
+                    if (response.code == 403 || response.code == 429) {
+                        return@withContext "API error: ${response.code}${if (message.isBlank()) "" else " - $message"}"
+                    }
+                }
             }
+            "API model error: ${errors.joinToString(" | ")}"
         } catch (e: Exception) {
             "Connection error: ${e.localizedMessage}"
+        }
+    }
+
+    private fun geminiRequest(model: String, apiKey: String, body: JSONObject): Request {
+        return Request.Builder()
+            .url("$GEMINI_API_BASE/$model:generateContent")
+            .addHeader("x-goog-api-key", apiKey)
+            .post(body.toString().toRequestBody("application/json".toMediaType()))
+            .build()
+    }
+
+    private fun parseGeminiError(rawError: String): String {
+        return try {
+            JSONObject(rawError).optJSONObject("error")?.optString("message").orEmpty()
+        } catch (_: Exception) {
+            rawError.take(120)
         }
     }
 
