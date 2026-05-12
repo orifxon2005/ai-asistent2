@@ -22,6 +22,7 @@ import android.provider.ContactsContract
 import android.speech.RecognitionListener
 import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
+import android.speech.tts.TextToSpeech
 import android.text.InputType
 import android.view.Gravity
 import android.view.View
@@ -55,7 +56,7 @@ import kotlin.math.cos
 import kotlin.math.min
 import kotlin.math.sin
 
-class MainActivity : AppCompatActivity() {
+class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
 
     private lateinit var prefs: SharedPreferences
     private lateinit var rootLayout: FrameLayout
@@ -68,6 +69,10 @@ class MainActivity : AppCompatActivity() {
     private var isTyping = false
     private var speechRecognizer: SpeechRecognizer? = null
     private var isListening = false
+    private var lastPartialSpeech = ""
+    private var lastSpeechErrorAt = 0L
+    private var tts: TextToSpeech? = null
+    private var ttsReady = false
 
     companion object {
         private const val PREF_NAME = "jarvis_prefs"
@@ -95,6 +100,7 @@ class MainActivity : AppCompatActivity() {
         rootLayout = FrameLayout(this).apply { setBackgroundColor(JarvisHudView.C_BG) }
         setContentView(rootLayout)
         supportActionBar?.hide()
+        tts = TextToSpeech(this, this)
         requestNotificationPermission()
         requestAssistantPermissions()
 
@@ -393,6 +399,15 @@ class MainActivity : AppCompatActivity() {
         rootLayout.addView(main)
 
         addMessage("SYS: J.A.R.V.I.S online. MARK XXX mobile systems ready.", false)
+        speak("JARVIS online. Buyruq berishingiz mumkin.")
+        lifecycleScope.launch {
+            delay(800)
+            if (!isListening && !isTyping &&
+                ContextCompat.checkSelfPermission(this@MainActivity, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
+            ) {
+                startListening()
+            }
+        }
     }
 
     private fun showApiResetDialog() {
@@ -423,8 +438,10 @@ class MainActivity : AppCompatActivity() {
 
     private fun startListening() {
         isListening = true
+        lastPartialSpeech = ""
         hudView?.statusText = "LISTENING"
         micBtn?.text = "REC"
+        speak("Eshityapman.")
         micBtn?.startAnimation(AlphaAnimation(0.35f, 1f).apply {
             duration = 450
             repeatCount = Animation.INFINITE
@@ -438,17 +455,45 @@ class MainActivity : AppCompatActivity() {
                 val text = results
                     ?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
                     ?.firstOrNull()
-                    .orEmpty()
+                    ?.ifBlank { lastPartialSpeech }
+                    ?: lastPartialSpeech
                 stopListening()
                 if (text.isNotBlank()) {
                     val apiKey = prefs.getString(KEY_API_KEY, "").orEmpty()
-                    sendMessage(text, apiKey)
+                    addMessage("You: $text", true)
+                    conversationHistory.add("user" to text)
+                    isTyping = true
+                    hudView?.statusText = "RESPONDING"
+                    lifecycleScope.launch {
+                        val reply = callGemini(apiKey)
+                        isTyping = false
+                        hudView?.statusText = "ONLINE"
+                        if (reply == null) {
+                            addMessage("Jarvis: API yoki internet xatosi.", false)
+                            speak("Internet yoki API xatosi.")
+                        } else {
+                            val agentHandled = handleAgentReply(reply)
+                            if (!agentHandled) {
+                                addMessage("Jarvis: $reply", false)
+                                speak(reply)
+                            }
+                            conversationHistory.add("model" to reply)
+                        }
+                    }
+                } else {
+                    handleSpeechMiss()
                 }
             }
 
             override fun onError(error: Int) {
+                val text = lastPartialSpeech.trim()
                 stopListening()
-                addMessage("SYS: Voice was not recognised. Try again.", false)
+                if (text.isNotBlank()) {
+                    val apiKey = prefs.getString(KEY_API_KEY, "").orEmpty()
+                    sendMessage(text, apiKey)
+                } else {
+                    handleSpeechMiss()
+                }
             }
 
             override fun onReadyForSpeech(params: Bundle?) = Unit
@@ -456,23 +501,38 @@ class MainActivity : AppCompatActivity() {
             override fun onRmsChanged(rmsdB: Float) = Unit
             override fun onBufferReceived(buffer: ByteArray?) = Unit
             override fun onEndOfSpeech() = Unit
-            override fun onPartialResults(partialResults: Bundle?) = Unit
+            override fun onPartialResults(partialResults: Bundle?) {
+                lastPartialSpeech = partialResults
+                    ?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
+                    ?.firstOrNull()
+                    .orEmpty()
+            }
             override fun onEvent(eventType: Int, params: Bundle?) = Unit
         })
 
         val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
             putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
-            putExtra(RecognizerIntent.EXTRA_LANGUAGE, Locale.getDefault().toLanguageTag())
-            putExtra(RecognizerIntent.EXTRA_LANGUAGE_PREFERENCE, Locale.getDefault().toLanguageTag())
+            putExtra(RecognizerIntent.EXTRA_LANGUAGE, "uz-UZ")
+            putExtra(RecognizerIntent.EXTRA_LANGUAGE_PREFERENCE, "uz-UZ")
             putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
             putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 5)
-            putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 1800L)
-            putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, 1200L)
+            putExtra(RecognizerIntent.EXTRA_PROMPT, "")
+            putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 2600L)
+            putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, 1700L)
         }
         try {
             speechRecognizer?.startListening(intent)
         } catch (_: Exception) {
             stopListening()
+        }
+    }
+
+    private fun handleSpeechMiss() {
+        val now = System.currentTimeMillis()
+        if (now - lastSpeechErrorAt > 2500) {
+            addMessage("SYS: Ovoz aniq eshitilmadi. Yana bir marta ayting.", false)
+            speak("Aniq eshitilmadi. Yana ayting.")
+            lastSpeechErrorAt = now
         }
     }
 
@@ -562,10 +622,12 @@ class MainActivity : AppCompatActivity() {
             messagesLayout?.removeView(typingView)
             if (reply == null) {
                 addMessage("Jarvis: Connection or API key error.", false)
+                speak("Internet yoki API kalit xatosi.")
             } else {
                 val agentHandled = handleAgentReply(reply)
                 if (!agentHandled) {
                     addMessage("Jarvis: $reply", false)
+                    speak(reply)
                 }
                 conversationHistory.add("model" to reply)
             }
@@ -609,6 +671,7 @@ class MainActivity : AppCompatActivity() {
 
         val spoken = json.optString("say").ifBlank { json.optString("message") }
         if (spoken.isNotBlank()) addMessage("Jarvis: $spoken", false)
+        if (spoken.isNotBlank()) speak(spoken)
 
         val steps = json.optJSONArray("steps")
         if (steps != null) {
@@ -750,6 +813,31 @@ class MainActivity : AppCompatActivity() {
         val max = audio.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
         val target = (max * level.coerceIn(0, 100) / 100f).toInt()
         audio.setStreamVolume(AudioManager.STREAM_MUSIC, target, AudioManager.FLAG_SHOW_UI)
+    }
+
+    override fun onInit(status: Int) {
+        if (status == TextToSpeech.SUCCESS) {
+            val uz = Locale("uz", "UZ")
+            val result = tts?.setLanguage(uz)
+            if (result == TextToSpeech.LANG_MISSING_DATA || result == TextToSpeech.LANG_NOT_SUPPORTED) {
+                tts?.language = Locale.getDefault()
+            }
+            tts?.setSpeechRate(0.96f)
+            ttsReady = true
+            if (messagesLayout != null) speak("JARVIS online. Buyruq berishingiz mumkin.")
+        }
+    }
+
+    private fun speak(text: String) {
+        if (!ttsReady) return
+        val clean = text
+            .replace(Regex("\\{.*}", RegexOption.DOT_MATCHES_ALL), "")
+            .replace("SYS:", "")
+            .replace("Jarvis:", "")
+            .trim()
+            .take(260)
+        if (clean.isBlank()) return
+        tts?.speak(clean, TextToSpeech.QUEUE_FLUSH, null, "jarvis-${System.currentTimeMillis()}")
     }
 
     private suspend fun callGemini(apiKey: String): String? = withContext(Dispatchers.IO) {
@@ -971,6 +1059,8 @@ class MainActivity : AppCompatActivity() {
     override fun onDestroy() {
         super.onDestroy()
         speechRecognizer?.destroy()
+        tts?.stop()
+        tts?.shutdown()
     }
 }
 

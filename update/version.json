@@ -1,6 +1,6 @@
 {
-  "versionCode": 16,
-  "versionName": "3.3",
+  "versionCode": 17,
+  "versionName": "3.4",
   "downloadUrl": "https://github.com/orifxon05/ai-asistent2/releases/latest/download/app-release.apk",
-  "changeLog": "Telefon agent rejimi qo'shildi: JARVIS doirasini bosib tinglash, app ochish, kontaktga qo'ng'iroq qilish, ekranni bosish, yozish va A11Y tool bajarish."
+  "changeLog": "JARVIS ovoz bilan gapiradi, ochilganda tinglashga tayyor bo'ladi, HUD bosilganda bevosita eshitadi va voice recognizer xatolari kamaytirildi."
 }

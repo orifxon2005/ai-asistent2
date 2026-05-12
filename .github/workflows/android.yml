@@ -54,9 +54,9 @@ jobs:
         name: "ai asistent2 v${{ steps.version.outputs.version }}"
         body: |
           ## Yangilanishlar v${{ steps.version.outputs.version }}
-          - JARVIS doirasini bosganda ovozli tinglash qo'shildi
-          - Android agent tool layer: open_app, call_contact, tap_text, type_text, scroll, back/home
-          - Gemini endi telefon buyruqlarini JSON tool steps qilib bajaradi
+          - JARVIS endi ovoz bilan javob beradi
+          - Ilova ochilganda tinglashga tayyor bo'ladi, HUD bosilganda bevosita eshitadi
+          - Voice recognizer partial natijalarini ishlatadi va xato spam kamaytirildi
         files: app-release.apk
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
