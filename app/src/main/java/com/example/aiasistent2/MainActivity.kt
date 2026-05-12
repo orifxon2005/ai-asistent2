@@ -6,16 +6,19 @@ import android.content.Context
 import android.content.Intent
 import android.content.SharedPreferences
 import android.content.pm.PackageManager
+import android.content.pm.ResolveInfo
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.RectF
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
+import android.media.AudioManager
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
+import android.provider.ContactsContract
 import android.speech.RecognitionListener
 import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
@@ -35,6 +38,7 @@ import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
@@ -70,6 +74,7 @@ class MainActivity : AppCompatActivity() {
         private const val KEY_API_KEY = "gemini_api_key"
         private const val MIC_PERMISSION_CODE = 101
         private const val NOTIFICATION_PERMISSION_CODE = 102
+        private const val ASSISTANT_PERMISSION_CODE = 103
         private const val FILE_PICK_CODE = 201
         private const val GEMINI_API_BASE = "https://generativelanguage.googleapis.com/v1beta/models"
         private val GEMINI_MODELS = listOf(
@@ -91,6 +96,7 @@ class MainActivity : AppCompatActivity() {
         setContentView(rootLayout)
         supportActionBar?.hide()
         requestNotificationPermission()
+        requestAssistantPermissions()
 
         val savedKey = prefs.getString(KEY_API_KEY, null)
         if (savedKey.isNullOrBlank()) {
@@ -213,6 +219,9 @@ class MainActivity : AppCompatActivity() {
 
         val hud = JarvisHudView(this).apply {
             statusText = "ONLINE"
+            isClickable = true
+            isFocusable = true
+            setOnClickListener { handleMicClick() }
             layoutParams = LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 0,
@@ -453,8 +462,12 @@ class MainActivity : AppCompatActivity() {
 
         val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
             putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
-            putExtra(RecognizerIntent.EXTRA_LANGUAGE, "uz-UZ")
-            putExtra(RecognizerIntent.EXTRA_LANGUAGE_PREFERENCE, "uz-UZ")
+            putExtra(RecognizerIntent.EXTRA_LANGUAGE, Locale.getDefault().toLanguageTag())
+            putExtra(RecognizerIntent.EXTRA_LANGUAGE_PREFERENCE, Locale.getDefault().toLanguageTag())
+            putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
+            putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 5)
+            putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 1800L)
+            putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, 1200L)
         }
         try {
             speechRecognizer?.startListening(intent)
@@ -519,6 +532,22 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private fun requestAssistantPermissions() {
+        val needed = mutableListOf<String>()
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+            needed.add(Manifest.permission.RECORD_AUDIO)
+        }
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.READ_CONTACTS) != PackageManager.PERMISSION_GRANTED) {
+            needed.add(Manifest.permission.READ_CONTACTS)
+        }
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.CALL_PHONE) != PackageManager.PERMISSION_GRANTED) {
+            needed.add(Manifest.permission.CALL_PHONE)
+        }
+        if (needed.isNotEmpty()) {
+            ActivityCompat.requestPermissions(this, needed.toTypedArray(), ASSISTANT_PERMISSION_CODE)
+        }
+    }
+
     private fun sendMessage(msg: String, apiKey: String) {
         addMessage("You: $msg", true)
         conversationHistory.add("user" to msg)
@@ -534,7 +563,10 @@ class MainActivity : AppCompatActivity() {
             if (reply == null) {
                 addMessage("Jarvis: Connection or API key error.", false)
             } else {
-                addMessage("Jarvis: $reply", false)
+                val agentHandled = handleAgentReply(reply)
+                if (!agentHandled) {
+                    addMessage("Jarvis: $reply", false)
+                }
                 conversationHistory.add("model" to reply)
             }
             scrollToBottom()
@@ -567,6 +599,159 @@ class MainActivity : AppCompatActivity() {
         chatScrollView?.post { chatScrollView?.fullScroll(ScrollView.FOCUS_DOWN) }
     }
 
+    private suspend fun handleAgentReply(reply: String): Boolean {
+        val jsonText = extractJson(reply) ?: return false
+        val json = try {
+            JSONObject(jsonText)
+        } catch (_: Exception) {
+            return false
+        }
+
+        val spoken = json.optString("say").ifBlank { json.optString("message") }
+        if (spoken.isNotBlank()) addMessage("Jarvis: $spoken", false)
+
+        val steps = json.optJSONArray("steps")
+        if (steps != null) {
+            for (i in 0 until steps.length()) {
+                val step = steps.optJSONObject(i) ?: continue
+                executeTool(step.optString("tool"), step.optJSONObject("args") ?: JSONObject())
+                delay(step.optLong("delay_ms", 650L))
+            }
+            return true
+        }
+
+        val tool = json.optString("tool")
+        if (tool.isNotBlank()) {
+            executeTool(tool, json.optJSONObject("args") ?: JSONObject())
+            return true
+        }
+        return spoken.isNotBlank()
+    }
+
+    private fun extractJson(raw: String): String? {
+        val cleaned = raw
+            .replace("```json", "", ignoreCase = true)
+            .replace("```", "")
+            .trim()
+        if (cleaned.startsWith("{") && cleaned.endsWith("}")) return cleaned
+        val start = cleaned.indexOf('{')
+        val end = cleaned.lastIndexOf('}')
+        return if (start >= 0 && end > start) cleaned.substring(start, end + 1) else null
+    }
+
+    private suspend fun executeTool(tool: String, args: JSONObject) {
+        val service = JarvisAccessibilityService.instance
+        val result = when (tool.lowercase(Locale.US)) {
+            "open_app" -> openApp(args.optString("app_name"))
+            "open_settings" -> {
+                startActivity(Intent(Settings.ACTION_SETTINGS))
+                true
+            }
+            "open_accessibility_settings" -> {
+                openAccessibilitySettings()
+                true
+            }
+            "call_contact" -> callContact(args.optString("contact_name"))
+            "dial_number" -> dialNumber(args.optString("phone"))
+            "tap_text" -> service?.clickText(args.optString("text")) == true
+            "type_text" -> service?.typeIntoFocused(args.optString("text")) == true
+            "append_text" -> service?.appendIntoFocused(args.optString("text")) == true
+            "press_enter", "send_enter" -> service?.pressImeAction() == true
+            "focus_input" -> service?.clickFirstEditable() == true
+            "back" -> service?.back() == true
+            "home" -> service?.home() == true
+            "recents" -> service?.recents() == true
+            "scroll_down" -> service?.scrollForward() == true
+            "scroll_up" -> service?.scrollBackward() == true
+            "read_screen" -> {
+                val text = service?.screenText(1600).orEmpty()
+                addMessage("SCREEN: ${text.ifBlank { "No readable text." }}", false)
+                true
+            }
+            "set_volume" -> {
+                setVolume(args.optInt("level", 70))
+                true
+            }
+            "wait" -> {
+                delay(args.optLong("ms", 800L))
+                true
+            }
+            else -> false
+        }
+
+        val label = tool.ifBlank { "unknown" }
+        addMessage("SYS: $label ${if (result) "done" else "failed"}", false)
+    }
+
+    private fun openApp(appName: String): Boolean {
+        val query = appName.trim().lowercase(Locale.getDefault())
+        if (query.isBlank()) return false
+        val launcherIntent = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
+        val apps: List<ResolveInfo> = packageManager.queryIntentActivities(launcherIntent, 0)
+        val match = apps.firstOrNull {
+            it.loadLabel(packageManager).toString().lowercase(Locale.getDefault()).contains(query)
+        } ?: apps.firstOrNull {
+            it.activityInfo.packageName.lowercase(Locale.getDefault()).contains(query)
+        } ?: return false
+        val intent = packageManager.getLaunchIntentForPackage(match.activityInfo.packageName) ?: return false
+        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        startActivity(intent)
+        return true
+    }
+
+    private fun callContact(contactName: String): Boolean {
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.READ_CONTACTS) != PackageManager.PERMISSION_GRANTED ||
+            ContextCompat.checkSelfPermission(this, Manifest.permission.CALL_PHONE) != PackageManager.PERMISSION_GRANTED
+        ) {
+            requestAssistantPermissions()
+            return false
+        }
+        val phone = findContactPhone(contactName) ?: return false
+        val intent = Intent(Intent.ACTION_CALL, Uri.parse("tel:$phone"))
+        startActivity(intent)
+        return true
+    }
+
+    private fun dialNumber(phone: String): Boolean {
+        val clean = phone.filter { it.isDigit() || it == '+' }
+        if (clean.isBlank()) return false
+        val action = if (ContextCompat.checkSelfPermission(this, Manifest.permission.CALL_PHONE) == PackageManager.PERMISSION_GRANTED) {
+            Intent.ACTION_CALL
+        } else {
+            Intent.ACTION_DIAL
+        }
+        startActivity(Intent(action, Uri.parse("tel:$clean")))
+        return true
+    }
+
+    private fun findContactPhone(contactName: String): String? {
+        val query = contactName.trim()
+        if (query.isBlank()) return null
+        val uri = ContactsContract.CommonDataKinds.Phone.CONTENT_URI
+        val projection = arrayOf(
+            ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME,
+            ContactsContract.CommonDataKinds.Phone.NUMBER
+        )
+        contentResolver.query(uri, projection, null, null, null)?.use { cursor ->
+            val nameIndex = cursor.getColumnIndex(ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME)
+            val numberIndex = cursor.getColumnIndex(ContactsContract.CommonDataKinds.Phone.NUMBER)
+            while (cursor.moveToNext()) {
+                val name = cursor.getString(nameIndex).orEmpty()
+                if (name.contains(query, ignoreCase = true)) {
+                    return cursor.getString(numberIndex)
+                }
+            }
+        }
+        return null
+    }
+
+    private fun setVolume(level: Int) {
+        val audio = getSystemService(Context.AUDIO_SERVICE) as AudioManager
+        val max = audio.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
+        val target = (max * level.coerceIn(0, 100) / 100f).toInt()
+        audio.setStreamVolume(AudioManager.STREAM_MUSIC, target, AudioManager.FLAG_SHOW_UI)
+    }
+
     private suspend fun callGemini(apiKey: String): String? = withContext(Dispatchers.IO) {
         try {
             val contentsArray = JSONArray()
@@ -583,9 +768,14 @@ class MainActivity : AppCompatActivity() {
                 JSONArray().put(
                     JSONObject().put(
                         "text",
-                        "You are J.A.R.V.I.S MARK XXX, a concise, direct mobile AI assistant. " +
-                            "Answer in the same language as the user. Do not use markdown. " +
-                            "You cannot control Windows from Android, but you can help with phone-friendly guidance."
+                        "You are J.A.R.V.I.S MARK XXX running on the user's Android phone. " +
+                            "You are an action agent, not only a chatbot. If the user asks to control the phone, open apps, tap, type, call, change settings, read screen, or send a message, return ONLY valid JSON and no markdown. " +
+                            "Use this schema: {\"say\":\"short same-language status\",\"steps\":[{\"tool\":\"tool_name\",\"args\":{}}]}. " +
+                            "Available tools: open_app(app_name), open_settings, open_accessibility_settings, call_contact(contact_name), dial_number(phone), tap_text(text), focus_input, type_text(text), append_text(text), press_enter, back, home, recents, scroll_down, scroll_up, read_screen, set_volume(level), wait(ms). " +
+                            "For Telegram/WhatsApp/message tasks, make a practical sequence: open_app, wait, tap_text/search if visible, type_text, tap_text contact, focus_input, type_text message, press_enter. " +
+                            "For app passcodes, type the passcode if the user explicitly gives it. " +
+                            "Never answer that you cannot control the phone when a tool can try. If a command is unsafe or impossible by Android security, briefly say what permission/settings step is needed. " +
+                            "For normal questions, answer naturally in the same language without JSON."
                     )
                 )
             )

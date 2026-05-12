@@ -54,9 +54,9 @@ jobs:
         name: "ai asistent2 v${{ steps.version.outputs.version }}"
         body: |
           ## Yangilanishlar v${{ steps.version.outputs.version }}
-          - Telefon UI kompyuter MARK XXX dizayniga yaqinlashtirildi
-          - SYS MONITOR, ACTIVITY LOG, FILE UPLOAD va COMMAND INPUT bloklari qo'shildi
-          - Android notification permission va full black no-actionbar rejimi qo'shildi
+          - JARVIS doirasini bosganda ovozli tinglash qo'shildi
+          - Android agent tool layer: open_app, call_contact, tap_text, type_text, scroll, back/home
+          - Gemini endi telefon buyruqlarini JSON tool steps qilib bajaradi
         files: app-release.apk
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

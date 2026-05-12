@@ -1,6 +1,6 @@
 {
-  "versionCode": 15,
-  "versionName": "3.2",
+  "versionCode": 16,
+  "versionName": "3.3",
   "downloadUrl": "https://github.com/orifxon05/ai-asistent2/releases/latest/download/app-release.apk",
-  "changeLog": "Kompyuter MARK XXX dizayniga yaqinlashtirildi: SYS MONITOR, ACTIVITY LOG, FILE UPLOAD, COMMAND INPUT va notification permission qo'shildi."
+  "changeLog": "Telefon agent rejimi qo'shildi: JARVIS doirasini bosib tinglash, app ochish, kontaktga qo'ng'iroq qilish, ekranni bosish, yozish va A11Y tool bajarish."
 }

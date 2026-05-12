@@ -39,11 +39,33 @@ class JarvisAccessibilityService : AccessibilityService() {
     }
 
     fun typeIntoFocused(text: String): Boolean {
-        val focused = rootInActiveWindow?.findFocus(AccessibilityNodeInfo.FOCUS_INPUT) ?: return false
+        val focused = rootInActiveWindow?.findFocus(AccessibilityNodeInfo.FOCUS_INPUT) ?: findEditable(rootInActiveWindow) ?: return false
         val args = Bundle().apply {
             putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, text)
         }
         return focused.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
+    }
+
+    fun appendIntoFocused(text: String): Boolean {
+        val focused = rootInActiveWindow?.findFocus(AccessibilityNodeInfo.FOCUS_INPUT) ?: findEditable(rootInActiveWindow) ?: return false
+        val current = focused.text?.toString().orEmpty()
+        val args = Bundle().apply {
+            putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, current + text)
+        }
+        return focused.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
+    }
+
+    fun pressImeAction(): Boolean {
+        return clickText("Send")
+            || clickText("Yuborish")
+            || clickText("Jo'natish")
+            || clickText("Jo‘natish")
+            || appendIntoFocused("\n")
+    }
+
+    fun clickFirstEditable(): Boolean {
+        val node = findEditable(rootInActiveWindow) ?: return false
+        return clickNode(node) || node.performAction(AccessibilityNodeInfo.ACTION_FOCUS)
     }
 
     fun scrollForward(): Boolean {
@@ -98,6 +120,16 @@ class JarvisAccessibilityService : AccessibilityService() {
         if (node.isScrollable) return node
         for (i in 0 until node.childCount) {
             val found = findScrollable(node.getChild(i))
+            if (found != null) return found
+        }
+        return null
+    }
+
+    private fun findEditable(node: AccessibilityNodeInfo?): AccessibilityNodeInfo? {
+        if (node == null) return null
+        if (node.isVisibleToUser && node.isEditable) return node
+        for (i in 0 until node.childCount) {
+            val found = findEditable(node.getChild(i))
             if (found != null) return found
         }
         return null
