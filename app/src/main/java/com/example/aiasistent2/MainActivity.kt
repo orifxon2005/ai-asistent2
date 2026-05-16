@@ -231,6 +231,25 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
 
     @SuppressLint("SetTextI18n")
     private fun showChatScreen(apiKey: String) {
+        try {
+            showChatScreenInternal(apiKey)
+        } catch (e: Exception) {
+            Log.e("JARVIS", "showChatScreen crashed", e)
+            rootLayout.removeAllViews()
+            rootLayout.addView(TextView(this).apply {
+                text = "JARVIS crash: ${e.message}\n\nTap to reset API key"
+                setTextColor(Color.WHITE)
+                textSize = 14f
+                setPadding(dp(20), dp(60), dp(20), dp(20))
+                setOnClickListener {
+                    prefs.edit().remove(KEY_API_KEY).apply()
+                    showApiKeyScreen()
+                }
+            })
+        }
+    }
+
+    private fun showChatScreenInternal(apiKey: String) {
         rootLayout.removeAllViews()
 
         val main = LinearLayout(this).apply {
@@ -418,7 +437,10 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         rootLayout.addView(main)
 
         addMessage("SYS: J.A.R.V.I.S online. MARK XXX mobile systems ready.", false)
-        speak("JARVIS online. Buyruq berishingiz mumkin.")
+        lifecycleScope.launch {
+            delay(500)
+            speak("JARVIS online. Buyruq berishingiz mumkin.")
+        }
     }
 
     private fun showApiResetDialog() {
@@ -1014,10 +1036,18 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
     }
 
     private fun checkForUpdates() {
-        val updater = com.example.aiasistent2.updater.AppUpdateChecker(this)
-        lifecycleScope.launch {
-            val info = updater.checkForUpdate()
-            if (info != null) updater.downloadAndInstall(info)
+        try {
+            val updater = com.example.aiasistent2.updater.AppUpdateChecker(this)
+            lifecycleScope.launch {
+                try {
+                    val info = updater.checkForUpdate()
+                    if (info != null) updater.downloadAndInstall(info)
+                } catch (e: Exception) {
+                    Log.e("JARVIS", "Update check failed", e)
+                }
+            }
+        } catch (e: Exception) {
+            Log.e("JARVIS", "Update init failed", e)
         }
     }
 
@@ -1191,23 +1221,28 @@ class JarvisHudView(context: Context) : View(context) {
 
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
-        tick += 1f
-        if (tick > 100000f) tick = 0f
-        val w = width.toFloat()
-        val h = height.toFloat()
-        val cx = w / 2f
-        val headerH = dp(62).toFloat()
-        val footerH = dp(28).toFloat()
-        val faceSize = min(w * 0.72f, h * 0.58f)
-        val cy = headerH + faceSize * 0.54f
-        val speaking = statusText == "RESPONDING" || statusText == "LISTENING"
+        try {
+            tick += 1f
+            if (tick > 100000f) tick = 0f
+            val w = width.toFloat()
+            val h = height.toFloat()
+            if (w <= 0f || h <= 0f) return
+            val cx = w / 2f
+            val headerH = dp(62).toFloat()
+            val footerH = dp(28).toFloat()
+            val faceSize = min(w * 0.72f, h * 0.58f)
+            val cy = headerH + faceSize * 0.54f
+            val speaking = statusText == "RESPONDING" || statusText == "LISTENING"
 
-        canvas.drawColor(C_BG)
-        drawGrid(canvas, w, h)
-        drawHeader(canvas, w, headerH)
-        drawCore(canvas, cx, cy, faceSize, speaking)
-        drawStatus(canvas, cx, cy + faceSize * 0.57f, speaking)
-        drawFooter(canvas, w, h, footerH)
+            canvas.drawColor(C_BG)
+            drawGrid(canvas, w, h)
+            drawHeader(canvas, w, headerH)
+            drawCore(canvas, cx, cy, faceSize, speaking)
+            drawStatus(canvas, cx, cy + faceSize * 0.57f, speaking)
+            drawFooter(canvas, w, h, footerH)
+        } catch (_: Exception) {
+            canvas.drawColor(C_BG)
+        }
     }
 
     private fun drawGrid(canvas: Canvas, w: Float, h: Float) {
