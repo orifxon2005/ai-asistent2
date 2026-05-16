@@ -23,7 +23,9 @@ import android.speech.RecognitionListener
 import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
 import android.speech.tts.TextToSpeech
+import android.speech.tts.UtteranceProgressListener
 import android.text.InputType
+import android.util.Log
 import android.view.Gravity
 import android.view.View
 import android.view.animation.AlphaAnimation
@@ -71,8 +73,12 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
     private var isListening = false
     private var lastPartialSpeech = ""
     private var lastSpeechErrorAt = 0L
+    private var speechErrorCount = 0
     private var tts: TextToSpeech? = null
     private var ttsReady = false
+    private var isSpeaking = false
+    private var pendingListenAfterSpeak = false
+    private var isActivityResumed = false
 
     companion object {
         private const val PREF_NAME = "jarvis_prefs"
@@ -111,6 +117,19 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
             showChatScreen(savedKey)
         }
         checkForUpdates()
+    }
+
+    override fun onResume() {
+        super.onResume()
+        isActivityResumed = true
+        hudView?.onResumeAnimation()
+    }
+
+    override fun onPause() {
+        super.onPause()
+        isActivityResumed = false
+        hudView?.onPauseAnimation()
+        if (isListening) stopListening()
     }
 
     @SuppressLint("SetTextI18n")
@@ -400,14 +419,6 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
 
         addMessage("SYS: J.A.R.V.I.S online. MARK XXX mobile systems ready.", false)
         speak("JARVIS online. Buyruq berishingiz mumkin.")
-        lifecycleScope.launch {
-            delay(800)
-            if (!isListening && !isTyping &&
-                ContextCompat.checkSelfPermission(this@MainActivity, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
-            ) {
-                startListening()
-            }
-        }
     }
 
     private fun showApiResetDialog() {
@@ -437,19 +448,39 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
     }
 
     private fun startListening() {
+        if (!isActivityResumed) return
+        if (isSpeaking) {
+            pendingListenAfterSpeak = true
+            return
+        }
+        if (!SpeechRecognizer.isRecognitionAvailable(this)) {
+            addMessage("SYS: Ovoz tanish xizmati mavjud emas.", false)
+            return
+        }
+
         isListening = true
         lastPartialSpeech = ""
+        speechErrorCount = 0
         hudView?.statusText = "LISTENING"
         micBtn?.text = "REC"
-        speak("Eshityapman.")
         micBtn?.startAnimation(AlphaAnimation(0.35f, 1f).apply {
             duration = 450
             repeatCount = Animation.INFINITE
             repeatMode = Animation.REVERSE
         })
 
-        speechRecognizer?.destroy()
-        speechRecognizer = SpeechRecognizer.createSpeechRecognizer(this)
+        try {
+            speechRecognizer?.destroy()
+            speechRecognizer = SpeechRecognizer.createSpeechRecognizer(this)
+        } catch (e: Exception) {
+            Log.e("JARVIS", "SpeechRecognizer create failed", e)
+            isListening = false
+            hudView?.statusText = "ONLINE"
+            micBtn?.clearAnimation()
+            micBtn?.text = "MIC"
+            return
+        }
+
         speechRecognizer?.setRecognitionListener(object : RecognitionListener {
             override fun onResults(results: Bundle?) {
                 val text = results
@@ -459,9 +490,11 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
                     ?: lastPartialSpeech
                 stopListening()
                 if (text.isNotBlank()) {
+                    speechErrorCount = 0
                     val apiKey = prefs.getString(KEY_API_KEY, "").orEmpty()
                     addMessage("You: $text", true)
                     conversationHistory.add("user" to text)
+                    trimConversationHistory()
                     isTyping = true
                     hudView?.statusText = "RESPONDING"
                     lifecycleScope.launch {
@@ -478,6 +511,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
                                 speak(reply)
                             }
                             conversationHistory.add("model" to reply)
+                            trimConversationHistory()
                         }
                     }
                 } else {
@@ -489,15 +523,21 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
                 val text = lastPartialSpeech.trim()
                 stopListening()
                 if (text.isNotBlank()) {
+                    speechErrorCount = 0
                     val apiKey = prefs.getString(KEY_API_KEY, "").orEmpty()
                     sendMessage(text, apiKey)
                 } else {
-                    handleSpeechMiss()
+                    speechErrorCount++
+                    if (speechErrorCount <= 2) {
+                        handleSpeechMiss()
+                    }
                 }
             }
 
             override fun onReadyForSpeech(params: Bundle?) = Unit
-            override fun onBeginningOfSpeech() = Unit
+            override fun onBeginningOfSpeech() {
+                speechErrorCount = 0
+            }
             override fun onRmsChanged(rmsdB: Float) = Unit
             override fun onBufferReceived(buffer: ByteArray?) = Unit
             override fun onEndOfSpeech() = Unit
@@ -522,16 +562,23 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         }
         try {
             speechRecognizer?.startListening(intent)
-        } catch (_: Exception) {
+        } catch (e: Exception) {
+            Log.e("JARVIS", "startListening failed", e)
             stopListening()
+        }
+    }
+
+    private fun trimConversationHistory() {
+        if (conversationHistory.size > 40) {
+            val excess = conversationHistory.size - 40
+            repeat(excess) { conversationHistory.removeAt(0) }
         }
     }
 
     private fun handleSpeechMiss() {
         val now = System.currentTimeMillis()
-        if (now - lastSpeechErrorAt > 2500) {
+        if (now - lastSpeechErrorAt > 5000) {
             addMessage("SYS: Ovoz aniq eshitilmadi. Yana bir marta ayting.", false)
-            speak("Aniq eshitilmadi. Yana ayting.")
             lastSpeechErrorAt = now
         }
     }
@@ -541,7 +588,11 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         hudView?.statusText = if (isTyping) "RESPONDING" else "ONLINE"
         micBtn?.clearAnimation()
         micBtn?.text = "MIC"
-        speechRecognizer?.stopListening()
+        try {
+            speechRecognizer?.stopListening()
+        } catch (e: Exception) {
+            Log.e("JARVIS", "stopListening failed", e)
+        }
     }
 
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<String>, grantResults: IntArray) {
@@ -611,6 +662,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
     private fun sendMessage(msg: String, apiKey: String) {
         addMessage("You: $msg", true)
         conversationHistory.add("user" to msg)
+        trimConversationHistory()
         isTyping = true
         hudView?.statusText = "RESPONDING"
         val typingView = addMessage("Jarvis: processing...", false)
@@ -630,6 +682,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
                     speak(reply)
                 }
                 conversationHistory.add("model" to reply)
+                trimConversationHistory()
             }
             scrollToBottom()
         }
@@ -823,8 +876,23 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
                 tts?.language = Locale.getDefault()
             }
             tts?.setSpeechRate(0.96f)
+            tts?.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
+                override fun onStart(utteranceId: String?) {
+                    isSpeaking = true
+                }
+                override fun onDone(utteranceId: String?) {
+                    isSpeaking = false
+                    if (pendingListenAfterSpeak) {
+                        pendingListenAfterSpeak = false
+                        runOnUiThread { startListening() }
+                    }
+                }
+                override fun onError(utteranceId: String?) {
+                    isSpeaking = false
+                    pendingListenAfterSpeak = false
+                }
+            })
             ttsReady = true
-            if (messagesLayout != null) speak("JARVIS online. Buyruq berishingiz mumkin.")
         }
     }
 
@@ -1058,9 +1126,13 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
 
     override fun onDestroy() {
         super.onDestroy()
-        speechRecognizer?.destroy()
-        tts?.stop()
-        tts?.shutdown()
+        try {
+            speechRecognizer?.destroy()
+        } catch (_: Exception) {}
+        try {
+            tts?.stop()
+            tts?.shutdown()
+        } catch (_: Exception) {}
     }
 }
 
@@ -1082,10 +1154,45 @@ class JarvisHudView(context: Context) : View(context) {
     }
     private val timeFormat = SimpleDateFormat("HH:mm:ss", Locale.US)
     private var tick = 0f
+    private var animating = true
+    private val frameHandler = android.os.Handler(android.os.Looper.getMainLooper())
+    private val frameRunnable = object : Runnable {
+        override fun run() {
+            if (animating) {
+                invalidate()
+                frameHandler.postDelayed(this, 33L)
+            }
+        }
+    }
+
+    fun onResumeAnimation() {
+        animating = true
+        frameHandler.removeCallbacks(frameRunnable)
+        frameHandler.post(frameRunnable)
+    }
+
+    fun onPauseAnimation() {
+        animating = false
+        frameHandler.removeCallbacks(frameRunnable)
+    }
+
+    override fun onAttachedToWindow() {
+        super.onAttachedToWindow()
+        if (animating) {
+            frameHandler.removeCallbacks(frameRunnable)
+            frameHandler.post(frameRunnable)
+        }
+    }
+
+    override fun onDetachedFromWindow() {
+        super.onDetachedFromWindow()
+        frameHandler.removeCallbacks(frameRunnable)
+    }
 
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
         tick += 1f
+        if (tick > 100000f) tick = 0f
         val w = width.toFloat()
         val h = height.toFloat()
         val cx = w / 2f
@@ -1101,8 +1208,6 @@ class JarvisHudView(context: Context) : View(context) {
         drawCore(canvas, cx, cy, faceSize, speaking)
         drawStatus(canvas, cx, cy + faceSize * 0.57f, speaking)
         drawFooter(canvas, w, h, footerH)
-
-        postInvalidateOnAnimation()
     }
 
     private fun drawGrid(canvas: Canvas, w: Float, h: Float) {
