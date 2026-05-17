@@ -106,30 +106,96 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         rootLayout = FrameLayout(this).apply { setBackgroundColor(JarvisHudView.C_BG) }
         setContentView(rootLayout)
         supportActionBar?.hide()
-        tts = TextToSpeech(this, this)
-        requestNotificationPermission()
-        requestAssistantPermissions()
 
-        val savedKey = prefs.getString(KEY_API_KEY, null)
-        if (savedKey.isNullOrBlank()) {
-            showApiKeyScreen()
-        } else {
-            showChatScreen(savedKey)
+        installCrashHandler()
+
+        val prevCrash = prefs.getString("last_crash", null)
+        if (prevCrash != null) {
+            prefs.edit().remove("last_crash").apply()
+            showCrashReport(prevCrash)
+            return
         }
-        checkForUpdates()
+
+        try {
+            tts = TextToSpeech(this, this)
+            requestNotificationPermission()
+            requestAssistantPermissions()
+
+            val savedKey = prefs.getString(KEY_API_KEY, null)
+            if (savedKey.isNullOrBlank()) {
+                showApiKeyScreen()
+            } else {
+                showChatScreen(savedKey)
+            }
+            checkForUpdates()
+        } catch (e: Throwable) {
+            Log.e("JARVIS", "onCreate crashed", e)
+            showCrashReport(e.stackTraceToString())
+        }
+    }
+
+    private fun installCrashHandler() {
+        val defaultHandler = Thread.getDefaultUncaughtExceptionHandler()
+        Thread.setDefaultUncaughtExceptionHandler { thread, throwable ->
+            try {
+                val trace = throwable.stackTraceToString().take(3000)
+                prefs.edit().putString("last_crash", trace).commit()
+            } catch (_: Throwable) {}
+            defaultHandler?.uncaughtException(thread, throwable)
+        }
+    }
+
+    @SuppressLint("SetTextI18n")
+    private fun showCrashReport(crashText: String) {
+        rootLayout.removeAllViews()
+        val sv = ScrollView(this)
+        sv.addView(TextView(this).apply {
+            text = "JARVIS CRASH REPORT\n\n$crashText\n\n--- Tap below to continue ---"
+            setTextColor(Color.WHITE)
+            textSize = 11f
+            typeface = Typeface.MONOSPACE
+            setPadding(dp(16), dp(48), dp(16), dp(16))
+        })
+        rootLayout.addView(sv)
+        rootLayout.addView(TextView(this).apply {
+            text = "RESET API KEY & RESTART"
+            setTextColor(Color.BLACK)
+            setBackgroundColor(Color.rgb(0, 212, 255))
+            textSize = 14f
+            typeface = Typeface.DEFAULT_BOLD
+            gravity = Gravity.CENTER
+            setPadding(dp(16), dp(14), dp(16), dp(14))
+            layoutParams = FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.WRAP_CONTENT,
+                Gravity.BOTTOM
+            )
+            setOnClickListener {
+                prefs.edit().remove(KEY_API_KEY).remove("last_crash").apply()
+                recreate()
+            }
+        })
     }
 
     override fun onResume() {
         super.onResume()
-        isActivityResumed = true
-        hudView?.onResumeAnimation()
+        try {
+            isActivityResumed = true
+            hudView?.onResumeAnimation()
+        } catch (e: Throwable) {
+            Log.e("JARVIS", "onResume crashed", e)
+        }
     }
 
     override fun onPause() {
         super.onPause()
-        isActivityResumed = false
-        hudView?.onPauseAnimation()
-        if (isListening) stopListening()
+        try {
+            isActivityResumed = false
+            hudView?.onPauseAnimation()
+            if (isListening) stopListening()
+        } catch (e: Throwable) {
+            Log.e("JARVIS", "onPause crashed", e)
+        }
     }
 
     @SuppressLint("SetTextI18n")
@@ -233,19 +299,9 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
     private fun showChatScreen(apiKey: String) {
         try {
             showChatScreenInternal(apiKey)
-        } catch (e: Exception) {
+        } catch (e: Throwable) {
             Log.e("JARVIS", "showChatScreen crashed", e)
-            rootLayout.removeAllViews()
-            rootLayout.addView(TextView(this).apply {
-                text = "JARVIS crash: ${e.message}\n\nTap to reset API key"
-                setTextColor(Color.WHITE)
-                textSize = 14f
-                setPadding(dp(20), dp(60), dp(20), dp(20))
-                setOnClickListener {
-                    prefs.edit().remove(KEY_API_KEY).apply()
-                    showApiKeyScreen()
-                }
-            })
+            showCrashReport(e.stackTraceToString())
         }
     }
 
@@ -438,8 +494,12 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
 
         addMessage("SYS: J.A.R.V.I.S online. MARK XXX mobile systems ready.", false)
         lifecycleScope.launch {
-            delay(500)
-            speak("JARVIS online. Buyruq berishingiz mumkin.")
+            try {
+                delay(500)
+                speak("JARVIS online. Buyruq berishingiz mumkin.")
+            } catch (e: Throwable) {
+                Log.e("JARVIS", "Startup speak failed", e)
+            }
         }
     }
 
@@ -1188,10 +1248,12 @@ class JarvisHudView(context: Context) : View(context) {
     private val frameHandler = android.os.Handler(android.os.Looper.getMainLooper())
     private val frameRunnable = object : Runnable {
         override fun run() {
-            if (animating) {
-                invalidate()
-                frameHandler.postDelayed(this, 33L)
-            }
+            try {
+                if (animating) {
+                    invalidate()
+                    frameHandler.postDelayed(this, 33L)
+                }
+            } catch (_: Throwable) {}
         }
     }
 
@@ -1240,7 +1302,7 @@ class JarvisHudView(context: Context) : View(context) {
             drawCore(canvas, cx, cy, faceSize, speaking)
             drawStatus(canvas, cx, cy + faceSize * 0.57f, speaking)
             drawFooter(canvas, w, h, footerH)
-        } catch (_: Exception) {
+        } catch (_: Throwable) {
             canvas.drawColor(C_BG)
         }
     }
