@@ -23,7 +23,7 @@ class AppUpdateChecker(private val context: Context) {
 
     companion object {
         private const val TAG = "AppUpdateChecker"
-        private const val GITHUB_REPO = "orifxon05/ai-asistent2"
+        private const val GITHUB_REPO = "orifxon2005/ai-asistent2"
         const val UPDATE_URL = "https://raw.githubusercontent.com/$GITHUB_REPO/main/update/version.json"
         const val APK_DOWNLOAD_URL = "https://github.com/$GITHUB_REPO/releases/latest/download/app-release.apk"
         const val APK_FILE_NAME = "update.apk"

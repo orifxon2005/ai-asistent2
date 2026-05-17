@@ -59,7 +59,6 @@ class JarvisAccessibilityService : AccessibilityService() {
         return clickText("Send")
             || clickText("Yuborish")
             || clickText("Jo'natish")
-            || clickText("Jo‘natish")
             || appendIntoFocused("\n")
     }
 
